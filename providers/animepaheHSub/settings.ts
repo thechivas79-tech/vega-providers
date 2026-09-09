@@ -44,7 +44,8 @@ export async function getSettingsSchema({
       key: "cloudflareUserAgent",
       type: "text",
       label: "Cloudflare User-Agent",
-      description: "Optional browser User-Agent used for AnimePahe and Kwik checks.",
+      description:
+        "Only used before the first verification. Afterwards the User-Agent from the verification page is reused, because the Cloudflare cookie is tied to it.",
       placeholder: "Leave empty to use Vega's default",
       defaultValue: "",
     },

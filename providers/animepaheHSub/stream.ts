@@ -1,98 +1,16 @@
 import { ProviderContext, Stream } from "../types";
 import { throwProviderError } from "../providerErrors";
 import {
+  extractKwikSource,
+  unpackDeanEdwards,
+} from "../extractors/kwik";
+import {
   getAnimePaheHtml,
   getBaseUrl,
   getWithClearance,
 } from "./client";
 
-const PACKER_ALPHABET =
-  "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-
-function encodePackerNumber(value: number, radix: number): string {
-  if (value === 0) return "0";
-  let current = value;
-  let output = "";
-  while (current > 0) {
-    output = PACKER_ALPHABET[current % radix] + output;
-    current = Math.floor(current / radix);
-  }
-  return output;
-}
-
-function unescapeJavascriptString(value: string): string {
-  return value.replace(
-    /\\(u[\da-fA-F]{4}|x[\da-fA-F]{2}|n|r|t|b|f|v|0|\\|'|")/g,
-    (_, token: string) => {
-      if (token.startsWith("u")) {
-        return String.fromCharCode(parseInt(token.slice(1), 16));
-      }
-      if (token.startsWith("x")) {
-        return String.fromCharCode(parseInt(token.slice(1), 16));
-      }
-      const escaped: Record<string, string> = {
-        n: "\n",
-        r: "\r",
-        t: "\t",
-        b: "\b",
-        f: "\f",
-        v: "\v",
-        "0": "\0",
-        "\\": "\\",
-        "'": "'",
-        '"': '"',
-      };
-      return escaped[token] ?? token;
-    },
-  );
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export function unpackDeanEdwards(source: string): string {
-  const patterns = [
-    /eval\(function\(p,a,c,k,e,(?:d|r)\)[\s\S]*?\}\(\s*'((?:\\.|[^'\\])*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:\\.|[^'\\])*)'\.split\(\s*'\|'\s*\)/,
-    /eval\(function\(p,a,c,k,e,(?:d|r)\)[\s\S]*?\}\(\s*"((?:\\.|[^"\\])*)"\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*"((?:\\.|[^"\\])*)"\.split\(\s*"\|"\s*\)/,
-  ];
-  const match = patterns.map((pattern) => pattern.exec(source)).find(Boolean);
-  if (!match) throw new Error("Kwik's packed script was missing");
-  const payload = unescapeJavascriptString(match[1]);
-  const radix = Number(match[2]);
-  const count = Number(match[3]);
-  const dictionary = unescapeJavascriptString(match[4]).split("|");
-  if (radix < 2 || radix > PACKER_ALPHABET.length) {
-    throw new Error(`Kwik used unsupported packer radix ${radix}`);
-  }
-
-  let unpacked = payload;
-  for (let index = count - 1; index >= 0; index -= 1) {
-    const replacement = dictionary[index];
-    if (!replacement) continue;
-    const token = encodePackerNumber(index, radix);
-    unpacked = unpacked.replace(
-      new RegExp(`\\b${escapeRegExp(token)}\\b`, "g"),
-      replacement,
-    );
-  }
-  return unpacked;
-}
-
-export function extractKwikSource(html: string): string {
-  const unpacked = unpackDeanEdwards(html);
-  const explicit = unpacked.match(
-    /const\s+source\s*=\s*\\?['"](https?:\\?\/\\?\/[^'"\s]+?\.m3u8[^'"]*)/i,
-  )?.[1];
-  const fallback = unpacked.match(
-    /https?:\\?\/\\?\/[^'"\\\s]+\.m3u8[^'"\\\s]*/i,
-  )?.[0];
-  const stream = (explicit || fallback || "")
-    .replace(/\\\//g, "/")
-    .replace(/\\u0026/g, "&");
-  if (!stream) throw new Error("Kwik HLS source was missing after unpacking");
-  return stream;
-}
+export { extractKwikSource, unpackDeanEdwards };
 
 async function resolveKwik(
   url: string,
@@ -124,6 +42,21 @@ async function resolveKwik(
     referer: response.finalUrl || url,
     userAgent: response.userAgent,
   };
+}
+
+function originOf(url: string, fallback: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return fallback;
+  }
+}
+
+// Once a challenge has defeated us there is no point dragging the user through
+// the same dialog again for every remaining resolution.
+function isClearanceFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /cloudflare|verification|security check/i.test(message);
 }
 
 function qualityOf(label: string): string {
@@ -168,7 +101,22 @@ export async function getStream({
         return item.url && (!quality || allowed.includes(quality));
       });
 
+    // Resolve the wanted quality first: if Kwik throws up a security check, it
+    // is spent on the stream the user actually asked for.
+    candidates.sort(
+      (left: { label: string }, right: { label: string }) => {
+        const leftQuality = qualityOf(left.label);
+        const rightQuality = qualityOf(right.label);
+        return (
+          (rightQuality === preferred ? 1 : 0) -
+            (leftQuality === preferred ? 1 : 0) ||
+          Number(rightQuality || 0) - Number(leftQuality || 0)
+        );
+      },
+    );
+
     const streams: Stream[] = [];
+    let clearanceError: unknown;
     for (const candidate of candidates) {
       try {
         const resolved = await resolveKwik(
@@ -186,13 +134,17 @@ export async function getStream({
           tag: "H-Sub",
           tags: ["H-Sub", "English Subbed"],
           headers: {
-            Origin: "https://kwik.cx",
+            Origin: originOf(resolved.referer, "https://kwik.si"),
             Referer: resolved.referer,
             "User-Agent": resolved.userAgent,
           },
         });
       } catch (error) {
         console.log("AnimePahe Kwik source failed", error);
+        if (isClearanceFailure(error)) {
+          clearanceError = error;
+          break;
+        }
       }
     }
     const unique = streams.filter(
@@ -207,7 +159,10 @@ export async function getStream({
         Number(right.quality || 0) - Number(left.quality || 0)
       );
     });
-    if (!unique.length) throw new Error("No playable AnimePahe H-Sub streams were found");
+    if (!unique.length) {
+      if (clearanceError) throw clearanceError;
+      throw new Error("No playable AnimePahe H-Sub streams were found");
+    }
     return unique;
   } catch (error) {
     throwProviderError("AnimePahe H-Sub", "stream", error);
