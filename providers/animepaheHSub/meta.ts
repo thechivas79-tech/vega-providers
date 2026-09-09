@@ -10,6 +10,7 @@ import {
   makeAnimeLink,
   parseAnimeLink,
 } from "./client";
+import { getEpisodes } from "./episodes";
 
 async function loadDetails(
   link: string,
@@ -105,6 +106,7 @@ export async function getMeta({
       throw new Error("Anime metadata was missing from the page");
     }
     const stableLink = makeAnimeLink(baseUrl, reference);
+    const episodes = await getEpisodes({ url: stableLink, providerContext });
     return {
       title,
       image: absoluteUrl(imageValue, baseUrl),
@@ -112,7 +114,17 @@ export async function getMeta({
       imdbId: "",
       type,
       tags: [...tags, "H-Sub", "English Subbed"],
-      linkList: [{ title: "Episodes", episodesLink: stableLink }],
+      linkList: [
+        episodes.length
+          ? {
+              title: "Episodes",
+              directLinks: episodes.map((episode) => ({
+                ...episode,
+                type: "series" as const,
+              })),
+            }
+          : { title: "Episodes", episodesLink: stableLink },
+      ],
       webUrl: `${baseUrl}/anime/${reference.session}`,
     };
   } catch (error) {

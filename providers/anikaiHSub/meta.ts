@@ -65,6 +65,23 @@ export async function getMeta({
     const rating =
       $('meta[itemprop="ratingValue"]').first().attr("content") || "";
     const sourceType = fieldValue($, "Type");
+    const directLinks = $(".epcheck .eplister li a, .eplister li a")
+      .map((_: number, node: any) => {
+        const row = $(node);
+        const href = row.attr("href") || "";
+        const episodeNumber = cleanText(row.find(".epl-num").text());
+        const episodeTitle = cleanText(row.find(".epl-title").text());
+        if (!href) return null;
+        return {
+          title: episodeNumber ? `Episode ${episodeNumber}` : episodeTitle,
+          link: absoluteUrl(href, page.url),
+          type: "series" as const,
+          description: cleanText(row.find(".epl-date").text()) || "English H-Sub",
+          image: imageValue ? absoluteUrl(imageValue, page.url) : undefined,
+        };
+      })
+      .get()
+      .filter(Boolean);
 
     if (!title || !imageValue) {
       throw new Error("Series metadata was missing from the page");
@@ -78,7 +95,11 @@ export async function getMeta({
       type: /movie|film/i.test(sourceType) ? "movie" : "series",
       tags: [...tags, "H-Sub", "English Subbed"],
       rating,
-      linkList: [{ title: "Episodes", episodesLink: page.url }],
+      linkList: [
+        directLinks.length
+          ? { title: "Episodes", directLinks }
+          : { title: "Episodes", episodesLink: page.url },
+      ],
       webUrl: page.url,
     };
   } catch (error) {

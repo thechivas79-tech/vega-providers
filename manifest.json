@@ -2,7 +2,7 @@
   {
     "display_name": "Anikai H-Sub",
     "value": "anikaiHSub",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "icon": "",
     "type": "global",
     "hasSettings": true,
@@ -11,7 +11,7 @@
   {
     "display_name": "AnimePahe H-Sub",
     "value": "animepaheHSub",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "icon": "",
     "type": "global",
     "hasSettings": true,

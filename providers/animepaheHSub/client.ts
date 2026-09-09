@@ -114,6 +114,7 @@ export async function getWithClearance(
     description: string;
     signal?: AbortSignal;
     forceWebViewOnHtml?: boolean;
+    challengeUrl?: string;
   },
 ): Promise<PageResponse> {
   const headers = await clearanceHeaders(
@@ -140,10 +141,16 @@ export async function getWithClearance(
     if (![403, 429, 503].includes(Number(status))) throw error;
   }
 
-  const solved = await providerContext.openWebView(url, {
+  const challengeUrl = options.challengeUrl || url;
+  const webViewHeaders = { ...headers };
+  delete webViewHeaders.Cookie;
+  delete webViewHeaders["sec-ch-ua"];
+  delete webViewHeaders["sec-ch-ua-mobile"];
+  delete webViewHeaders["sec-ch-ua-platform"];
+  const solved = await providerContext.openWebView(challengeUrl, {
     title: options.title,
     description: options.description,
-    headers,
+    headers: webViewHeaders,
     waitForCookie: "cf_clearance",
     force: true,
     timeoutMs: 120000,
@@ -160,23 +167,25 @@ export async function getWithClearance(
       solved.userAgent,
     );
   }
-  if (solved.data && !isChallenge(solved.data)) {
-    return {
-      data: solved.data,
-      finalUrl: solved.url || url,
-      userAgent: solved.userAgent || headers["User-Agent"],
-    };
-  }
-
   const retryHeaders = await clearanceHeaders(
     providerContext,
     options.namespace,
     options.referer,
   );
-  const retry = await providerContext.axios.get(url, {
-    signal: options.signal,
-    headers: retryHeaders,
-  });
+  let retry;
+  try {
+    retry = await providerContext.axios.get(url, {
+      signal: options.signal,
+      headers: retryHeaders,
+    });
+  } catch (error) {
+    if ([403, 503].includes(Number((error as any)?.response?.status))) {
+      throw new Error(
+        "Cloudflare verification did not clear. Keep the verification page open until it closes automatically, then retry.",
+      );
+    }
+    throw error;
+  }
   if (isChallenge(retry.data)) {
     throw new Error("The Cloudflare check was still active after WebView verification");
   }
@@ -211,6 +220,7 @@ export async function getApiPage<T>(
     title: "AnimePahe security check",
     description: "Complete the security check once, then return to Vega.",
     signal,
+    challengeUrl: `${baseUrl}/`,
   });
   return normalizeApiPage<T>(response.data);
 }
@@ -227,6 +237,7 @@ export async function getAnimePaheHtml(
     title: "AnimePahe security check",
     description: "Complete the security check once, then return to Vega.",
     signal,
+    challengeUrl: `${baseUrl}/`,
   });
   return String(response.data || "");
 }
