@@ -1,0 +1,20 @@
+[
+  {
+    "display_name": "Anikai H-Sub",
+    "value": "anikaiHSub",
+    "version": "1.0.0",
+    "icon": "",
+    "type": "global",
+    "hasSettings": true,
+    "disabled": false
+  },
+  {
+    "display_name": "AnimePahe H-Sub",
+    "value": "animepaheHSub",
+    "version": "1.0.0",
+    "icon": "",
+    "type": "global",
+    "hasSettings": true,
+    "disabled": false
+  }
+]
