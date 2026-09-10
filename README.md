@@ -3,7 +3,7 @@
 Two anime providers for Vega:
 
 - **Anikai H-Sub** — catalog, search, metadata, episodes, and direct Blogger MP4 streams from `anikai.tv`.
-- **AnimeGG H-Sub 1080** — native catalog, search, metadata, episodes, and direct H-Sub MP4 streams in 480p, 720p, and 1080p when available. Downloads use a signed proxy URL optimized for saving the MP4.
+- **Anime 1080 Native** — native catalog, search, metadata, episodes, and direct H-Sub MP4 streams in 480p, 720p, and 1080p when AnimeGG has the episode. Missing AnimeGG episodes automatically use a 1080p HLS fallback with English subtitles. Downloads use the signed MP4 when available; Vega's segmented HLS downloader handles the fallback.
 
 The second provider keeps the old `animepaheHSub` identifier so existing installations update in place. Version 2 uses JustAnime's native API and AnimeGG media instead of AnimePahe or Kwik, so it never opens a Cloudflare WebView.
 

@@ -210,12 +210,67 @@ async function testNativePlaybackAndDownloadPrefer1080() {
   assert.equal(native.webViewCalls(), 0);
 }
 
+async function testMissingAnimeGgEpisodeUses1080Fallback() {
+  const native = makeNativeContext(async (url) => {
+    if (url.includes("cdn.example/master.m3u8")) {
+      return {
+        data:
+          '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5500000,RESOLUTION=1920x1080\nindex-f1.m3u8',
+      };
+    }
+    if (url.includes("/megaplay")) {
+      return {
+        data: {
+          sub: {
+            sources: [
+              {
+                url: "https://cdn.example/master.m3u8",
+                quality: "auto",
+                isM3U8: true,
+              },
+            ],
+            subtitles: [
+              {
+                file: "https://cdn.example/english.vtt",
+                label: "English (CR)",
+                kind: "captions",
+              },
+            ],
+            intro: { start: 25, end: 115 },
+            headers: { Referer: "https://megaplay.buzz/" },
+          },
+        },
+      };
+    }
+    const error = new Error("Request failed with status code 404");
+    error.response = { status: 404 };
+    throw error;
+  });
+  const streams = await nativeStream.getStream({
+    link: "https://justanime.to/watch/135865/episode/2",
+    type: "series",
+    signal: new AbortController().signal,
+    providerContext: native.context,
+    isDownload: true,
+  });
+  assert.equal(streams.length, 1);
+  assert.equal(streams[0].type, "m3u8");
+  assert.equal(streams[0].quality, "1080");
+  assert.equal(streams[0].subtitles[0].language, "en");
+  assert.deepEqual(streams[0].skip, [
+    { title: "Intro", from: 25, to: 115 },
+  ]);
+  assert.match(streams[0].server, /Soft-Sub fallback/);
+  assert.equal(native.webViewCalls(), 0);
+}
+
 async function main() {
   bloggerParserPasses();
   await testAnikaiStreamUserAgentMatchesResolver();
   await testNativeCatalogUsesAllowedOriginWithoutWebView();
   await testNativeEpisodesCombinePages();
   await testNativePlaybackAndDownloadPrefer1080();
+  await testMissingAnimeGgEpisodeUses1080Fallback();
   console.log("Provider parser, 1080p, download and no-WebView checks passed");
 }
 

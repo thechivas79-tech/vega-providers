@@ -14,6 +14,7 @@ export async function getSettingsSchema({
         { label: "1080p", value: "1080" },
         { label: "720p", value: "720" },
         { label: "480p", value: "480" },
+        { label: "360p", value: "360" },
       ],
       defaultValue: "1080",
     },
@@ -25,8 +26,9 @@ export async function getSettingsSchema({
         { label: "1080p", value: "1080" },
         { label: "720p", value: "720" },
         { label: "480p", value: "480" },
+        { label: "360p", value: "360" },
       ],
-      defaultValue: ["1080", "720", "480"],
+      defaultValue: ["1080", "720", "480", "360"],
     },
     {
       key: "apiBaseUrl",

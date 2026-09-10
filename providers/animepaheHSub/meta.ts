@@ -54,7 +54,12 @@ export async function getMeta({
       synopsis: cleanSynopsis(anime.description || "", providerContext),
       imdbId: "",
       type: isMovie ? "movie" : "series",
-      tags: [...(anime.genres || []), "H-Sub", "1080p"],
+      tags: [
+        ...(anime.genres || []),
+        "1080p",
+        "H-Sub when available",
+        "Soft-Sub fallback",
+      ],
       cast: (anime.characters || [])
         .map((entry) => String(entry.node?.name || "").trim())
         .filter(Boolean),
@@ -76,6 +81,6 @@ export async function getMeta({
       webUrl: `${SITE_BASE}/anime/${id}`,
     };
   } catch (error) {
-    throwProviderError("AnimeGG H-Sub 1080", "metadata", error);
+    throwProviderError("Anime 1080 Native", "metadata", error);
   }
 }

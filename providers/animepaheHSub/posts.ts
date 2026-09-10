@@ -22,7 +22,7 @@ interface SearchResponse {
 function toPost(item: AnimeCard): Post {
   const details = [
     item.latestEpisode ? `Episode ${item.latestEpisode}` : "",
-    "H-Sub",
+    "Native",
     "up to 1080p",
   ].filter(Boolean);
   return {
@@ -56,7 +56,7 @@ export async function getPosts({
       : "latestEpisode";
     return (home[key] || []).map(toPost).filter((post) => post.image);
   } catch (error) {
-    throwProviderError("AnimeGG H-Sub 1080", "catalog", error);
+    throwProviderError("Anime 1080 Native", "catalog", error);
   }
 }
 
@@ -79,6 +79,6 @@ export async function getSearchPosts({
     const result = await getApi<SearchResponse>(providerContext, path, signal);
     return (result.results || []).map(toPost).filter((post) => post.image);
   } catch (error) {
-    throwProviderError("AnimeGG H-Sub 1080", "search", error);
+    throwProviderError("Anime 1080 Native", "search", error);
   }
 }
