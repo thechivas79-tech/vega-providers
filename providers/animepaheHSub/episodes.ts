@@ -1,27 +1,27 @@
 import { EpisodeLink, ProviderContext } from "../types";
 import { throwProviderError } from "../providerErrors";
-import {
-  cacheReference,
-  findReference,
-  getApiPage,
-  getBaseUrl,
-  parseAnimeLink,
-} from "./client";
+import { getApi, makeEpisodeLink, parseAnimeId } from "./client";
 
-interface EpisodeItem {
-  created_at: string;
-  session: string;
-  episode: number;
-  anime_id: number;
+interface ApiEpisode {
+  number: number;
+  title?: string;
+  airDate?: string;
 }
 
-function episodeTitle(value: number): string {
-  const number = Number(value);
-  return `Episode ${Number.isInteger(number) ? number.toFixed(0) : number}`;
+interface EpisodePage {
+  totalPages?: number;
+  episodes?: ApiEpisode[];
 }
 
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function pageOf(
+  providerContext: ProviderContext,
+  id: string,
+  page: number,
+): Promise<EpisodePage> {
+  return getApi<EpisodePage>(
+    providerContext,
+    `/anime/${encodeURIComponent(id)}/episodes?page=${page}`,
+  );
 }
 
 export async function getEpisodes({
@@ -32,58 +32,29 @@ export async function getEpisodes({
   providerContext: ProviderContext;
 }): Promise<EpisodeLink[]> {
   try {
-    const baseUrl = await getBaseUrl(providerContext);
-    let reference = parseAnimeLink(url, baseUrl);
-    reference.session =
-      reference.session ||
-      (reference.id
-        ? (await providerContext.kvStore.get<string>(
-            `animepahe.session.${reference.id}`,
-          )) || ""
-        : "");
-    if (!reference.session) {
-      reference =
-        (await findReference(
-          providerContext,
-          reference.id,
-          reference.title,
-        )) || reference;
-    }
-    if (!reference.session) throw new Error("Anime session was unavailable");
+    const id = parseAnimeId(url);
+    if (!id) throw new Error("Anime ID was missing");
+    const first = await pageOf(providerContext, id, 1);
+    const totalPages = Math.max(1, Number(first.totalPages) || 1);
+    const remaining = await Promise.all(
+      Array.from({ length: totalPages - 1 }, (_, index) =>
+        pageOf(providerContext, id, index + 2),
+      ),
+    );
+    const episodes = [first, ...remaining]
+      .flatMap((page) => page.episodes || [])
+      .filter((episode) => Number(episode.number) > 0)
+      .sort((left, right) => Number(right.number) - Number(left.number));
 
-    const episodes: EpisodeLink[] = [];
-    let page = 1;
-    let lastPage = 1;
-    do {
-      const apiUrl = new URL("/api", baseUrl);
-      apiUrl.searchParams.set("m", "release");
-      apiUrl.searchParams.set("id", reference.session);
-      apiUrl.searchParams.set("sort", "episode_asc");
-      apiUrl.searchParams.set("page", String(page));
-      const result = await getApiPage<EpisodeItem>(providerContext, apiUrl.href);
-      lastPage = result.last_page;
-      for (const episode of result.data) {
-        const play = new URL(
-          `/play/${reference.session}/${episode.session}`,
-          baseUrl,
-        );
-        play.searchParams.set("anime_id", String(episode.anime_id));
-        episodes.push({
-          title: episodeTitle(episode.episode),
-          link: play.href,
-          description: episode.created_at || "English H-Sub",
-        });
-      }
-      if (result.data[0]) {
-        reference.id = String(result.data[0].anime_id);
-        await cacheReference(providerContext, reference);
-      }
-      page += 1;
-      if (page <= lastPage) await wait(750);
-    } while (page <= lastPage);
-
-    return episodes.reverse();
+    return episodes.map((episode) => ({
+      title:
+        episode.title && !/^episode\s+[\d.]+$/i.test(episode.title)
+          ? `Episode ${episode.number} — ${episode.title}`
+          : `Episode ${episode.number}`,
+      link: makeEpisodeLink(id, episode.number),
+      description: episode.airDate || "English H-Sub",
+    }));
   } catch (error) {
-    throwProviderError("AnimePahe H-Sub", "episodes", error);
+    throwProviderError("AnimeGG H-Sub 1080", "episodes", error);
   }
 }

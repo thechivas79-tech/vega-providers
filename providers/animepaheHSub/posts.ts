@@ -1,46 +1,41 @@
 import { Post, ProviderContext } from "../types";
 import { throwProviderError } from "../providerErrors";
 import {
-  AnimeReference,
-  cacheReference,
-  getApiPage,
-  getBaseUrl,
+  AnimeCard,
+  animeImage,
+  animeTitle,
+  getApi,
   makeAnimeLink,
 } from "./client";
 
-interface AiringItem {
-  anime_id: number;
-  anime_session: string;
-  anime_title: string;
-  snapshot: string;
-  fansub?: string;
+interface HomeResponse {
+  trending?: AnimeCard[];
+  popular?: AnimeCard[];
+  airing?: AnimeCard[];
+  latestEpisode?: AnimeCard[];
 }
 
-interface SearchItem {
-  id: number;
-  title: string;
-  poster: string;
-  session: string;
+interface SearchResponse {
+  results?: AnimeCard[];
 }
 
-async function toPost(
-  providerContext: ProviderContext,
-  baseUrl: string,
-  reference: AnimeReference,
-  image: string,
-  detail?: string,
-): Promise<Post> {
-  await cacheReference(providerContext, reference);
+function toPost(item: AnimeCard): Post {
+  const details = [
+    item.latestEpisode ? `Episode ${item.latestEpisode}` : "",
+    "H-Sub",
+    "up to 1080p",
+  ].filter(Boolean);
   return {
-    title: reference.title,
-    link: makeAnimeLink(baseUrl, reference),
-    image,
+    title: animeTitle(item.title),
+    link: makeAnimeLink(item.id),
+    image: animeImage(item),
     provider: "animepaheHSub",
-    tag: detail ? `${detail} • H-Sub` : "H-Sub",
+    tag: details.join(" • "),
   };
 }
 
 export async function getPosts({
+  filter,
   page,
   signal,
   providerContext,
@@ -52,32 +47,16 @@ export async function getPosts({
   providerContext: ProviderContext;
 }): Promise<Post[]> {
   try {
-    const baseUrl = await getBaseUrl(providerContext);
-    const url = new URL("/api", baseUrl);
-    url.searchParams.set("m", "airing");
-    url.searchParams.set("page", String(Math.max(1, page)));
-    const result = await getApiPage<AiringItem>(
-      providerContext,
-      url.href,
-      signal,
-    );
-    return Promise.all(
-      result.data.map((item) =>
-        toPost(
-          providerContext,
-          baseUrl,
-          {
-            id: String(item.anime_id),
-            session: item.anime_session,
-            title: item.anime_title,
-          },
-          item.snapshot,
-          item.fansub,
-        ),
-      ),
-    );
+    if (Math.max(1, Number(page) || 1) > 1) return [];
+    const home = await getApi<HomeResponse>(providerContext, "/home", signal);
+    const key = ["trending", "popular", "airing", "latestEpisode"].includes(
+        filter,
+      )
+      ? (filter as keyof HomeResponse)
+      : "latestEpisode";
+    return (home[key] || []).map(toPost).filter((post) => post.image);
   } catch (error) {
-    throwProviderError("AnimePahe H-Sub", "catalog", error);
+    throwProviderError("AnimeGG H-Sub 1080", "catalog", error);
   }
 }
 
@@ -96,34 +75,10 @@ export async function getSearchPosts({
   try {
     const query = searchQuery.trim();
     if (!query) return [];
-    const baseUrl = await getBaseUrl(providerContext);
-    const url = new URL("/api", baseUrl);
-    url.searchParams.set("m", "search");
-    url.searchParams.set(
-      "q",
-      `${query} ${Math.floor(Date.now() / 1000) + Math.max(1, page) * 3}`,
-    );
-    url.searchParams.set("page", String(Math.max(1, page)));
-    const result = await getApiPage<SearchItem>(
-      providerContext,
-      url.href,
-      signal,
-    );
-    return Promise.all(
-      result.data.map((item) =>
-        toPost(
-          providerContext,
-          baseUrl,
-          {
-            id: String(item.id),
-            session: item.session,
-            title: item.title,
-          },
-          item.poster,
-        ),
-      ),
-    );
+    const path = `/search?query=${encodeURIComponent(query)}&page=${Math.max(1, Number(page) || 1)}`;
+    const result = await getApi<SearchResponse>(providerContext, path, signal);
+    return (result.results || []).map(toPost).filter((post) => post.image);
   } catch (error) {
-    throwProviderError("AnimePahe H-Sub", "search", error);
+    throwProviderError("AnimeGG H-Sub 1080", "search", error);
   }
 }

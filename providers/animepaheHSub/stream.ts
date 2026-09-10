@@ -1,72 +1,109 @@
 import { ProviderContext, Stream } from "../types";
 import { throwProviderError } from "../providerErrors";
-import {
-  extractKwikSource,
-  unpackDeanEdwards,
-} from "../extractors/kwik";
-import {
-  getAnimePaheHtml,
-  getBaseUrl,
-  getWithClearance,
-} from "./client";
+import { getApi, parseEpisodeLink } from "./client";
 
-export { extractKwikSource, unpackDeanEdwards };
+interface AnimeGgSource {
+  url: string;
+  quality?: string;
+  isM3U8?: boolean;
+  headers?: Record<string, string>;
+}
 
-async function resolveKwik(
-  url: string,
-  baseUrl: string,
+interface AnimeGgPlayback {
+  sub?: {
+    sources?: AnimeGgSource[];
+  } | null;
+}
+
+interface AnimeGgDownload {
+  quality?: string;
+  resolution?: number;
+  filesize?: string;
+  download?: string;
+}
+
+interface AnimeGgDownloads {
+  downloads?: AnimeGgDownload[];
+}
+
+function qualityOf(value?: string | number): string {
+  return String(value || "").match(/(360|480|720|1080|2160)/)?.[1] || "";
+}
+
+function sortStreams(streams: Stream[], preferred: string): Stream[] {
+  return streams.sort((left, right) => {
+    const leftPreferred = left.quality === preferred ? 1 : 0;
+    const rightPreferred = right.quality === preferred ? 1 : 0;
+    return (
+      rightPreferred - leftPreferred ||
+      Number(right.quality || 0) - Number(left.quality || 0)
+    );
+  });
+}
+
+async function downloadStreams(
+  animeId: string,
+  episode: string,
   providerContext: ProviderContext,
   signal?: AbortSignal,
-): Promise<{ url: string; referer: string; userAgent: string }> {
-  let response = await getWithClearance(providerContext, url, {
-    namespace: "kwik",
-    referer: `${baseUrl}/`,
-    title: "Kwik security check",
-    description: "Complete the video host security check, then return to Vega.",
+): Promise<Stream[]> {
+  const result = await getApi<AnimeGgDownloads>(
+    providerContext,
+    `/watch/${encodeURIComponent(animeId)}/episode/${encodeURIComponent(episode)}/download/animegg`,
     signal,
-  });
-  let html = String(response.data || "");
-  if (!/eval\(function\(p,a,c,k,e,/i.test(html)) {
-    response = await getWithClearance(providerContext, response.finalUrl || url, {
-      namespace: "kwik",
-      referer: `${baseUrl}/`,
-      title: "Kwik video check",
-      description: "Open the player once so Vega can resolve its H-Sub stream.",
-      signal,
-      forceWebViewOnHtml: true,
+  );
+  return (result.downloads || [])
+    .filter((item) => item.download)
+    .map((item) => {
+      const quality = qualityOf(item.resolution || item.quality);
+      return {
+        server: `AnimeGG Download ${quality ? `${quality}p` : "MP4"}${item.filesize ? ` • ${item.filesize}` : ""}`,
+        link: String(item.download),
+        type: "mp4",
+        quality: quality || undefined,
+        tag: "H-Sub",
+        tags: ["H-Sub", "English Subbed", "Download"],
+      } satisfies Stream;
     });
-    html = String(response.data || "");
-  }
-  return {
-    url: extractKwikSource(html),
-    referer: response.finalUrl || url,
-    userAgent: response.userAgent,
-  };
 }
 
-function originOf(url: string, fallback: string): string {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return fallback;
-  }
-}
-
-// Once a challenge has defeated us there is no point dragging the user through
-// the same dialog again for every remaining resolution.
-function isClearanceFailure(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /cloudflare|verification|security check/i.test(message);
-}
-
-function qualityOf(label: string): string {
-  return label.match(/(360|480|720|1080|2160)\s*p?/i)?.[1] || "";
+async function playbackStreams(
+  animeId: string,
+  episode: string,
+  providerContext: ProviderContext,
+  signal?: AbortSignal,
+): Promise<Stream[]> {
+  const result = await getApi<AnimeGgPlayback>(
+    providerContext,
+    `/watch/${encodeURIComponent(animeId)}/episode/${encodeURIComponent(episode)}/animegg`,
+    signal,
+  );
+  return (result.sub?.sources || [])
+    .filter((source) => source.url)
+    .map((source) => {
+      const quality = qualityOf(source.quality);
+      return {
+        server: `AnimeGG ${quality ? `${quality}p` : "H-Sub"}`,
+        link: source.url,
+        type: source.isM3U8 || /\.m3u8(?:[?#]|$)/i.test(source.url)
+          ? "m3u8"
+          : "mp4",
+        quality: quality || undefined,
+        tag: "H-Sub",
+        tags: ["H-Sub", "English Subbed"],
+        headers: {
+          ...providerContext.commonHeaders,
+          ...(source.headers || {}),
+        },
+      } satisfies Stream;
+    });
 }
 
 export async function getStream({
   link,
   signal,
   providerContext,
+  isDownload,
 }: {
   link: string;
   type: string;
@@ -75,96 +112,45 @@ export async function getStream({
   isDownload?: boolean;
 }): Promise<Stream[]> {
   try {
-    const baseUrl = await getBaseUrl(providerContext);
-    const playUrl = new URL(link, `${baseUrl}/`);
-    playUrl.searchParams.delete("anime_id");
-    const html = await getAnimePaheHtml(
-      providerContext,
-      playUrl.href,
-      signal,
-    );
-    const $ = providerContext.cheerio.load(html);
+    const { animeId, episode } = parseEpisodeLink(link);
+    if (!animeId || !episode) throw new Error("Episode link was incomplete");
     const preferred =
       (await providerContext.kvStore.get<string>("preferredQuality")) ||
       "1080";
     const allowed =
       (await providerContext.kvStore.get<string[]>("allowedResolutions")) ||
-      ["1080", "720", "360"];
-    const candidates = $("div#resolutionMenu > button[data-src]")
-      .map((_: number, node: any) => ({
-        url: $(node).attr("data-src") || "",
-        label: $(node).text().replace(/\s+/g, " ").trim(),
-      }))
-      .get()
-      .filter((item: { url: string; label: string }) => {
-        const quality = qualityOf(item.label);
-        return item.url && (!quality || allowed.includes(quality));
-      });
+      ["1080", "720", "480"];
 
-    // Resolve the wanted quality first: if Kwik throws up a security check, it
-    // is spent on the stream the user actually asked for.
-    candidates.sort(
-      (left: { label: string }, right: { label: string }) => {
-        const leftQuality = qualityOf(left.label);
-        const rightQuality = qualityOf(right.label);
-        return (
-          (rightQuality === preferred ? 1 : 0) -
-            (leftQuality === preferred ? 1 : 0) ||
-          Number(rightQuality || 0) - Number(leftQuality || 0)
-        );
-      },
-    );
-
-    const streams: Stream[] = [];
-    let clearanceError: unknown;
-    for (const candidate of candidates) {
+    let streams: Stream[] = [];
+    if (isDownload) {
       try {
-        const resolved = await resolveKwik(
-          candidate.url,
-          baseUrl,
+        streams = await downloadStreams(
+          animeId,
+          episode,
           providerContext,
           signal,
         );
-        const quality = qualityOf(candidate.label);
-        streams.push({
-          server: candidate.label || `Kwik ${quality || "HLS"}`,
-          link: resolved.url,
-          type: "m3u8",
-          quality: quality || undefined,
-          tag: "H-Sub",
-          tags: ["H-Sub", "English Subbed"],
-          headers: {
-            Origin: originOf(resolved.referer, "https://kwik.si"),
-            Referer: resolved.referer,
-            "User-Agent": resolved.userAgent,
-          },
-        });
       } catch (error) {
-        console.log("AnimePahe Kwik source failed", error);
-        if (isClearanceFailure(error)) {
-          clearanceError = error;
-          break;
-        }
+        console.log("AnimeGG signed download source failed", error);
       }
     }
-    const unique = streams.filter(
-      (stream, index, all) =>
-        all.findIndex((candidate) => candidate.link === stream.link) === index,
-    );
-    unique.sort((left, right) => {
-      const leftPreferred = left.quality === preferred ? 1 : 0;
-      const rightPreferred = right.quality === preferred ? 1 : 0;
-      return (
-        rightPreferred - leftPreferred ||
-        Number(right.quality || 0) - Number(left.quality || 0)
+    if (!streams.length) {
+      streams = await playbackStreams(
+        animeId,
+        episode,
+        providerContext,
+        signal,
       );
-    });
-    if (!unique.length) {
-      if (clearanceError) throw clearanceError;
-      throw new Error("No playable AnimePahe H-Sub streams were found");
     }
-    return unique;
+
+    const filtered = streams.filter(
+      (stream) => !stream.quality || allowed.includes(stream.quality),
+    );
+    if (!filtered.length) {
+      throw new Error("No allowed AnimeGG H-Sub streams were available");
+    }
+    return sortStreams(filtered, preferred);
   } catch (error) {
-    throwProviderError("AnimePahe H-Sub", "stream", error);
+    throwProviderError("AnimeGG H-Sub 1080", "stream", error);
   }
 }

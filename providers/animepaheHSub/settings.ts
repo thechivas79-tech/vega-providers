@@ -7,25 +7,13 @@ export async function getSettingsSchema({
 }): Promise<SettingsField[]> {
   return [
     {
-      key: "preferredDomain",
-      type: "select",
-      label: "AnimePahe domain",
-      description: "Choose an available official AnimePahe mirror.",
-      options: [
-        { label: "animepahe.pw", value: "https://animepahe.pw" },
-        { label: "animepahe.com", value: "https://animepahe.com" },
-        { label: "animepahe.org", value: "https://animepahe.org" },
-      ],
-      defaultValue: "https://animepahe.pw",
-    },
-    {
       key: "preferredQuality",
       type: "select",
       label: "Preferred quality",
       options: [
         { label: "1080p", value: "1080" },
         { label: "720p", value: "720" },
-        { label: "360p", value: "360" },
+        { label: "480p", value: "480" },
       ],
       defaultValue: "1080",
     },
@@ -36,17 +24,16 @@ export async function getSettingsSchema({
       options: [
         { label: "1080p", value: "1080" },
         { label: "720p", value: "720" },
-        { label: "360p", value: "360" },
+        { label: "480p", value: "480" },
       ],
-      defaultValue: ["1080", "720", "360"],
+      defaultValue: ["1080", "720", "480"],
     },
     {
-      key: "cloudflareUserAgent",
+      key: "apiBaseUrl",
       type: "text",
-      label: "Cloudflare User-Agent",
-      description:
-        "Only used before the first verification. Afterwards the User-Agent from the verification page is reused, because the Cloudflare cookie is tied to it.",
-      placeholder: "Leave empty to use Vega's default",
+      label: "Native API mirror",
+      description: "Optional JustAnime API mirror for advanced users.",
+      placeholder: "https://core.justanime.to/api",
       defaultValue: "",
     },
   ];
