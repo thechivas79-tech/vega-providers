@@ -56,7 +56,7 @@ export async function getPosts({
       : "latestEpisode";
     return (home[key] || []).map(toPost).filter((post) => post.image);
   } catch (error) {
-    throwProviderError("Anime 1080 Native", "catalog", error);
+    throwProviderError("Anime H-Sub 1080", "catalog", error);
   }
 }
 
@@ -79,6 +79,6 @@ export async function getSearchPosts({
     const result = await getApi<SearchResponse>(providerContext, path, signal);
     return (result.results || []).map(toPost).filter((post) => post.image);
   } catch (error) {
-    throwProviderError("Anime 1080 Native", "search", error);
+    throwProviderError("Anime H-Sub 1080", "search", error);
   }
 }

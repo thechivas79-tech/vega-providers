@@ -97,7 +97,7 @@ export async function getMeta({
       rating,
       linkList: [
         directLinks.length
-          ? { title: "Episodes", directLinks }
+          ? { title: "Episodes • Fast 1080p H-Sub", directLinks }
           : { title: "Episodes", episodesLink: page.url },
       ],
       webUrl: page.url,

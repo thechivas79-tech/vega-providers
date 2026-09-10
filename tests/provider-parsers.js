@@ -21,33 +21,46 @@ function makeKvStore() {
   };
 }
 
-function bloggerParserPasses() {
-  const bloggerPayload = JSON.stringify([
-    [
-      "wrb.fr",
-      "WcwnYd",
-      JSON.stringify([null, null, [["https://video.example/file.mp4", [22]]]]),
-    ],
-  ]);
-  assert.deepEqual(anikaiStream.parseBloggerBatchResponse(bloggerPayload), [
-    ["https://video.example/file.mp4", [22]],
-  ]);
+function hardSubFixture(url) {
+  if (url.includes("anineko.to/browser")) {
+    return `<article class="nv-anime-card"><h3 class="nv-anime-title"><a href="/watch/one-piece">One Piece</a></h3></article>`;
+  }
+  if (url === "https://anineko.to/watch/one-piece") {
+    return `<article class="nv-info-episode-item"><a class="nv-info-episode-main" href="/watch/one-piece/ep-2"><strong>Episode 2</strong></a></article><article class="nv-info-episode-item"><a class="nv-info-episode-main" href="/watch/one-piece/ep-1177"><strong>Episode 1177</strong></a></article>`;
+  }
+  if (
+    url === "https://anineko.to/watch/one-piece/ep-2" ||
+    url === "https://anineko.to/watch/one-piece/ep-1177"
+  ) {
+    return `<div class="nv-server-panel" data-id="hsub"><button class="nv-server-btn" data-video="https://otakuhg.site/e/hard-one-piece">StreamHG <span>Hard Sub</span></button></div><div class="nv-server-panel" data-id="sub"><button class="nv-server-btn" data-video="https://bibiemb.xyz/soft-one-piece?sub=english.vtt">HD-2 <span>Soft Sub</span></button></div>`;
+  }
+  if (url === "https://otakuhg.site/d/hard-one-piece") {
+    return `<a class="downloadv-item"><small>1920x1080 800.5 MB</small></a><a class="downloadv-item"><small>1280x720 410.2 MB</small></a><a class="downloadv-item"><small>640x360 175.4 MB</small></a>`;
+  }
+  if (url === "https://otakuhg.site/e/hard-one-piece") {
+    return `const src = "https://cdn.example/hard/master.m3u8";`;
+  }
+  if (url === "https://cdn.example/hard/master.m3u8") {
+    return `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360
+360.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2800000,RESOLUTION=1280x720
+720.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=5500000,RESOLUTION=1920x1080
+1080.m3u8`;
+  }
+  if (url === "https://cdn.example/hard/360.m3u8") {
+    return `#EXTM3U
+#EXTINF:600,
+segment-1.ts
+#EXTINF:600,
+segment-2.ts`;
+  }
+  return undefined;
 }
 
-async function testAnikaiStreamUserAgentMatchesResolver() {
+async function testAnikaiUsesFast1080HardSubsWithoutBlogger() {
   const seen = [];
-  const episodeHtml = `<div id="embed_holder"><iframe src="https://www.blogger.com/video.g?token=TOKEN&origin=op.blogspot.com"></iframe></div>`;
-  const playerHtml = `<script>window.WIZ_global_data = {"FdrFJe":"-123","cfb2h":"boq_test"};</script>`;
-  const batch = `)]}'\n\n[["wrb.fr","WcwnYd",${JSON.stringify(
-    JSON.stringify([
-      null,
-      null,
-      [
-        ["https://rr1.googlevideo.com/videoplayback?itag=22&eaua=hash", [22]],
-        ["https://rr1.googlevideo.com/videoplayback?itag=18&eaua=hash", [18]],
-      ],
-    ]),
-  )}]]`;
   const providerContext = {
     commonHeaders: { "User-Agent": "Vega/1.0 (Android)" },
     cheerio,
@@ -55,29 +68,36 @@ async function testAnikaiStreamUserAgentMatchesResolver() {
     axios: {
       get: async (url, config) => {
         seen.push([url, config.headers["User-Agent"]]);
-        return {
-          data: url.includes("blogger.com/video.g") ? playerHtml : episodeHtml,
-        };
-      },
-      post: async (url, _body, config) => {
-        seen.push([url, config.headers["User-Agent"]]);
-        return { data: batch };
+        const fixture = hardSubFixture(url);
+        if (fixture !== undefined) return { data: fixture };
+        if (url.includes("anikai.tv")) {
+          return {
+            data: `<h1 class="entry-title">One Piece Episode 1177 English Subbed</h1><iframe src="https://www.blogger.com/video.g?token=slow"></iframe>`,
+          };
+        }
+        throw new Error(`Unexpected request: ${url}`);
       },
     },
   };
   const streams = await anikaiStream.getStream({
-    link: "https://anikai.tv/show-episode-1-english-subbed/",
+    link: "https://anikai.tv/one-piece-episode-1177-english-subbed/",
     type: "series",
     providerContext,
+    isDownload: true,
   });
-  assert.deepEqual(streams.map((stream) => stream.quality), ["720", "360"]);
+  assert.deepEqual(streams.map((stream) => stream.quality), [
+    "1080",
+    "720",
+    "360",
+  ]);
+  assert.match(streams[0].server, /800\.5 MB/);
+  assert.equal(streams[0].tag, "H-Sub");
+  assert.equal(streams[0].subtitles, undefined);
+  assert.equal(seen.some(([url]) => url.includes("blogger.com")), false);
   assert.deepEqual(
     [...new Set(seen.map(([, agent]) => agent))],
     ["Vega/1.0 (Android)"],
   );
-  for (const stream of streams) {
-    assert.equal(stream.headers["User-Agent"], "Vega/1.0 (Android)");
-  }
 }
 
 function makeNativeContext(handler) {
@@ -210,38 +230,22 @@ async function testNativePlaybackAndDownloadPrefer1080() {
   assert.equal(native.webViewCalls(), 0);
 }
 
-async function testMissingAnimeGgEpisodeUses1080Fallback() {
+async function testMissingAnimeGgEpisodeUsesHardSub1080Fallback() {
   const native = makeNativeContext(async (url) => {
-    if (url.includes("cdn.example/master.m3u8")) {
-      return {
-        data:
-          '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5500000,RESOLUTION=1920x1080\nindex-f1.m3u8',
-      };
-    }
-    if (url.includes("/megaplay")) {
+    if (url.endsWith("/api/anime/135865")) {
       return {
         data: {
-          sub: {
-            sources: [
-              {
-                url: "https://cdn.example/master.m3u8",
-                quality: "auto",
-                isM3U8: true,
-              },
-            ],
-            subtitles: [
-              {
-                file: "https://cdn.example/english.vtt",
-                label: "English (CR)",
-                kind: "captions",
-              },
-            ],
-            intro: { start: 25, end: 115 },
-            headers: { Referer: "https://megaplay.buzz/" },
+          data: {
+            title: {
+              english: "One Piece",
+              romaji: "One Piece",
+            },
           },
         },
       };
     }
+    const fixture = hardSubFixture(url);
+    if (fixture !== undefined) return { data: fixture };
     const error = new Error("Request failed with status code 404");
     error.response = { status: 404 };
     throw error;
@@ -253,25 +257,22 @@ async function testMissingAnimeGgEpisodeUses1080Fallback() {
     providerContext: native.context,
     isDownload: true,
   });
-  assert.equal(streams.length, 1);
+  assert.equal(streams.length, 3);
   assert.equal(streams[0].type, "m3u8");
   assert.equal(streams[0].quality, "1080");
-  assert.equal(streams[0].subtitles[0].language, "en");
-  assert.deepEqual(streams[0].skip, [
-    { title: "Intro", from: 25, to: 115 },
-  ]);
-  assert.match(streams[0].server, /Soft-Sub fallback/);
+  assert.equal(streams[0].subtitles, undefined);
+  assert.equal(streams[0].tag, "H-Sub");
+  assert.match(streams[0].server, /1080p • 800\.5 MB/);
   assert.equal(native.webViewCalls(), 0);
 }
 
 async function main() {
-  bloggerParserPasses();
-  await testAnikaiStreamUserAgentMatchesResolver();
+  await testAnikaiUsesFast1080HardSubsWithoutBlogger();
   await testNativeCatalogUsesAllowedOriginWithoutWebView();
   await testNativeEpisodesCombinePages();
   await testNativePlaybackAndDownloadPrefer1080();
-  await testMissingAnimeGgEpisodeUses1080Fallback();
-  console.log("Provider parser, 1080p, download and no-WebView checks passed");
+  await testMissingAnimeGgEpisodeUsesHardSub1080Fallback();
+  console.log("1080p Hard-Sub, size, download and no-WebView checks passed");
 }
 
 main().catch((error) => {

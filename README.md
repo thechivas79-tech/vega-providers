@@ -2,12 +2,12 @@
 
 Two anime providers for Vega:
 
-- **Anikai H-Sub** — catalog, search, metadata, episodes, and direct Blogger MP4 streams from `anikai.tv`.
-- **Anime 1080 Native** — native catalog, search, metadata, episodes, and direct H-Sub MP4 streams in 480p, 720p, and 1080p when AnimeGG has the episode. Missing AnimeGG episodes automatically use a 1080p HLS fallback with English subtitles. Downloads use the signed MP4 when available; Vega's segmented HLS downloader handles the fallback.
+- **Anikai H-Sub** — Anikai catalog, search, metadata, and episodes with fast Hard-Sub HLS playback in 480p, 720p, and genuine 1080p. The slow Blogger streams are excluded.
+- **Anime H-Sub 1080** — native catalog, search, metadata, episodes, and Hard-Sub playback in 480p, 720p, and 1080p. AnimeGG is used first; missing episodes use the same native Hard-Sub HLS resolver as Anikai. Soft-sub sources are excluded.
 
-The second provider keeps the old `animepaheHSub` identifier so existing installations update in place. Version 2 uses JustAnime's native API and AnimeGG media instead of AnimePahe or Kwik, so it never opens a Cloudflare WebView.
+The second provider keeps the old `animepaheHSub` identifier so existing installations update in place. It uses JustAnime's native API and Hard-Sub media sources, so it never opens a Cloudflare WebView.
 
-Anikai's Blogger host currently supplies 720p and 360p for most episodes. The provider exposes 1080p automatically whenever Anikai supplies Blogger itag 37, but it cannot increase the resolution of a 720p source file.
+Download quality choices include exact AnimeGG file sizes or clearly marked HLS size estimates such as `~262 MB`. Estimates are calculated from the rendition bitrate and episode duration.
 
 ## Build
 
@@ -20,5 +20,5 @@ The installable bundles are generated in `dist/`. Both provider entries are decl
 
 ## Vega settings
 
-- Anikai supports a custom base URL.
-- AnimeGG supports preferred quality, allowed resolutions, and an optional JustAnime API mirror.
+- Anikai supports preferred quality, allowed resolutions, and a custom base URL.
+- Anime H-Sub 1080 supports preferred quality, allowed resolutions, and an optional JustAnime API mirror.

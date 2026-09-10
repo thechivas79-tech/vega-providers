@@ -1,29 +1,19 @@
-import { ProviderContext, Stream, TextTracks } from "../types";
+import { ProviderContext, Stream } from "../types";
 import { throwProviderError } from "../providerErrors";
+import { getAniNekoHardSubStreams } from "../extractors/anineko";
 import { extractKwikSource, kwikQuality } from "../extractors/kwik";
-import { absoluteUrl, getBaseUrl, getHtml } from "./client";
-
-type BloggerFormat = [string, number[]?];
-
-// Blogger only ever transcodes 360p (itag 18) and 720p (itag 22). The taller
-// itags are kept for the rare upload that already carries them.
-const ITAG_QUALITY: Record<number, string> = {
-  17: "144",
-  18: "360",
-  59: "480",
-  22: "720",
-  37: "1080",
-  38: "2160",
-};
+import {
+  absoluteUrl,
+  cleanText,
+  getBaseUrl,
+  getHtml,
+  seriesTitleFromEpisode,
+} from "./client";
 
 const FALLBACK_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-// Google signs every googlevideo URL with an `eaua` parameter derived from the
-// User-Agent that asked for it, and `eaua` is covered by the URL signature.
-// Playing the URL back with a different User-Agent returns HTTP 403, so the
-// exact same value has to be used to resolve the URL and to fetch the video.
 function streamUserAgent(providerContext: ProviderContext): string {
   const headers = providerContext.commonHeaders || {};
   return headers["User-Agent"] || headers["user-agent"] || FALLBACK_USER_AGENT;
@@ -37,149 +27,17 @@ function decodeBase64(value: string): string {
   }
 }
 
-function getWizData(html: string): Record<string, unknown> {
-  const marker = "window.WIZ_global_data = ";
-  const start = html.indexOf(marker);
-  if (start < 0) throw new Error("Blogger configuration was missing");
-  const valueStart = start + marker.length;
-  const valueEnd = html.indexOf(";</script>", valueStart);
-  if (valueEnd < 0) throw new Error("Blogger configuration was incomplete");
-  return JSON.parse(html.slice(valueStart, valueEnd));
-}
-
-export function parseBloggerBatchResponse(data: string): BloggerFormat[] {
-  for (const line of data.split(/\r?\n/)) {
-    const value = line.trim();
-    if (!value.startsWith("[[")) continue;
-    try {
-      const rows = JSON.parse(value);
-      for (const row of rows) {
-        if (row?.[0] !== "wrb.fr" || row?.[1] !== "WcwnYd") continue;
-        const payload = JSON.parse(row[2]);
-        if (Array.isArray(payload?.[2])) return payload[2] as BloggerFormat[];
-      }
-    } catch {
-      // Batchexecute responses contain length lines between JSON chunks.
-    }
-  }
-  return [];
-}
-
-function itagOf(url: string, itags?: number[]): number {
-  const fromPayload = Number(itags?.[0]);
-  if (Number.isFinite(fromPayload) && fromPayload > 0) return fromPayload;
-  try {
-    return Number(new URL(url).searchParams.get("itag")) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-async function resolveBlogger(
-  playerUrl: string,
-  pageUrl: string,
-  userAgent: string,
-  providerContext: ProviderContext,
-  signal?: AbortSignal,
-): Promise<Stream[]> {
-  const { axios, commonHeaders } = providerContext;
-  const token = new URL(playerUrl).searchParams.get("token");
-  if (!token) throw new Error("Blogger token was missing");
-
-  const player = await axios.get(playerUrl, {
-    signal,
-    headers: {
-      ...commonHeaders,
-      "User-Agent": userAgent,
-      Accept: "text/html,application/xhtml+xml",
-      Referer: pageUrl,
-    },
-  });
-  const wiz = getWizData(String(player.data || ""));
-  const sid = String(wiz.FdrFJe || "");
-  const buildLabel = String(wiz.cfb2h || "");
-  if (!sid || !buildLabel) throw new Error("Blogger RPC metadata was missing");
-
-  const endpoint = new URL(
-    "/_/BloggerVideoPlayerUi/data/batchexecute",
-    playerUrl,
-  );
-  endpoint.searchParams.set("rpcids", "WcwnYd");
-  endpoint.searchParams.set("source-path", "/video.g");
-  endpoint.searchParams.set("f.sid", sid);
-  endpoint.searchParams.set("bl", buildLabel);
-  endpoint.searchParams.set("hl", "en-US");
-  endpoint.searchParams.set("_reqid", String((Date.now() % 900000) + 100000));
-  endpoint.searchParams.set("rt", "c");
-
-  const request = JSON.stringify([
-    [["WcwnYd", JSON.stringify([token, null, 0]), null, "generic"]],
-  ]);
-  const response = await axios.post(
-    endpoint.href,
-    `f.req=${encodeURIComponent(request)}&`,
-    {
-      signal,
-      headers: {
-        ...commonHeaders,
-        "User-Agent": userAgent,
-        Accept: "*/*",
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "X-Same-Domain": "1",
-        Origin: new URL(playerUrl).origin,
-        Referer: playerUrl,
-      },
-    },
-  );
-
-  const formats = parseBloggerBatchResponse(String(response.data || ""));
-  return formats
-    .filter((format) => typeof format?.[0] === "string")
-    .map(([url, itags]) => {
-      const itag = itagOf(url, itags);
-      const quality = ITAG_QUALITY[itag] || "";
-      return {
-        server: `Blogger ${quality || itag || "MP4"}${quality ? "p" : ""}`,
-        link: url,
-        type: "mp4",
-        quality: quality || undefined,
-        tag: "H-Sub",
-        tags: ["H-Sub", "English Subbed"],
-        headers: {
-          Referer: "https://www.blogger.com/",
-          "User-Agent": userAgent,
-        },
-      } satisfies Stream;
-    });
-}
-
-// Part of Anikai's back catalogue is hosted on Kwik, the same player
-// AnimePahe uses. Kwik only answers for a Referer on its own allowlist, and its
-// WAF rejects HTTP/1.1 clients outright, so a plain request can come back
-// blocked even with perfect headers - hence the WebView fallback.
+// A small part of the back catalogue has a directly readable Kwik player. A
+// blocked Kwik page is skipped so playback never opens a verification WebView.
 async function fetchKwikPage(
   embedUrl: string,
   providerContext: ProviderContext,
   signal?: AbortSignal,
 ): Promise<string> {
-  let blocked: unknown;
-  try {
-    const html = await getHtml(providerContext, embedUrl, signal);
-    if (/eval\(function\(p,a,c,k,e,/i.test(html)) return html;
-    blocked = new Error("Kwik returned a page without its player script");
-  } catch (error) {
-    blocked = error;
+  const html = await getHtml(providerContext, embedUrl, signal);
+  if (!/eval\(function\(p,a,c,k,e,/i.test(html)) {
+    throw new Error("Kwik returned a blocked player page");
   }
-  if (typeof providerContext.openWebView !== "function") throw blocked;
-
-  const solved = await providerContext.openWebView(embedUrl, {
-    title: "Kwik player check",
-    description: "Open the player once so Vega can read its H-Sub stream.",
-    force: true,
-    timeoutMs: 120000,
-  });
-  const html = String(solved.data || "");
-  if (!/eval\(function\(p,a,c,k,e,/i.test(html)) throw blocked;
   return html;
 }
 
@@ -259,46 +117,11 @@ function collectEmbeds(
   return embeds;
 }
 
-// Much of Anikai's back catalogue sits on megaplay, whose getSources endpoint
-// returns the video as an encrypted `enc` blob. The subtitle track next to it is
-// still plain, so it is worth attaching to whatever else the page offers.
-async function megaplaySubtitles(
-  embedUrl: string,
-  providerContext: ProviderContext,
-  signal?: AbortSignal,
-): Promise<TextTracks> {
-  const html = await getHtml(providerContext, embedUrl, signal);
-  const id = html.match(/data-id="(\d+)"/)?.[1];
-  if (!id) return [];
-  const sources = new URL("/stream/getSources", embedUrl);
-  sources.searchParams.set("id", id);
-  const response = await providerContext.axios.get(sources.href, {
-    signal,
-    headers: {
-      ...providerContext.commonHeaders,
-      Accept: "application/json",
-      "X-Requested-With": "XMLHttpRequest",
-      Referer: embedUrl,
-    },
-  });
-  const payload =
-    typeof response.data === "string"
-      ? JSON.parse(response.data)
-      : response.data;
-  return (payload?.tracks || [])
-    .filter((track: any) => track?.file && track?.kind === "captions")
-    .map((track: any) => ({
-      title: String(track.label || "Subtitles"),
-      language: String(track.label || "English").slice(0, 2).toLowerCase(),
-      type: "text/vtt" as const,
-      uri: String(track.file),
-    }));
-}
-
 export async function getStream({
   link,
   signal,
   providerContext,
+  isDownload,
 }: {
   link: string;
   type: string;
@@ -310,27 +133,65 @@ export async function getStream({
     const baseUrl = await getBaseUrl(providerContext);
     const pageUrl = absoluteUrl(link, baseUrl);
     const html = await getHtml(providerContext, pageUrl, signal);
+    const $ = providerContext.cheerio.load(html);
+    const heading = cleanText(
+      $("h1.entry-title, .entry-title").first().text() ||
+        $('meta[property="og:title"]').attr("content") ||
+        $("title").text(),
+    );
+    const slugTitle = decodeURIComponent(new URL(pageUrl).pathname)
+      .replace(/^\/+|\/+$/g, "")
+      .replace(/-/g, " ");
+    const episode =
+      pageUrl.match(/episode[-/](\d+(?:\.\d+)?)/i)?.[1] ||
+      heading.match(/episode\s+(\d+(?:\.\d+)?)/i)?.[1] ||
+      slugTitle.match(/episode\s+(\d+(?:\.\d+)?)/i)?.[1] ||
+      "1";
+    const titles = [heading, slugTitle]
+      .map(seriesTitleFromEpisode)
+      .filter(Boolean);
+    const preferred =
+      (await providerContext.kvStore.get<string>("preferredQuality")) ||
+      "1080";
+    const allowed =
+      (await providerContext.kvStore.get<string[]>("allowedResolutions")) ||
+      ["1080", "720", "480", "360"];
+
+    try {
+      const fastStreams = await getAniNekoHardSubStreams({
+        titles,
+        episode,
+        providerContext,
+        signal,
+        isDownload,
+      });
+      const filtered = fastStreams.filter(
+        (stream) => !stream.quality || allowed.includes(stream.quality),
+      );
+      if (filtered.length) {
+        return filtered.sort((left, right) => {
+          const leftPreferred = left.quality === preferred ? 1 : 0;
+          const rightPreferred = right.quality === preferred ? 1 : 0;
+          return (
+            rightPreferred - leftPreferred ||
+            Number(right.quality || 0) - Number(left.quality || 0)
+          );
+        });
+      }
+    } catch (error) {
+      console.log("Anikai fast 1080p H-Sub source failed", error);
+    }
+
     const userAgent = streamUserAgent(providerContext);
     const embeds = collectEmbeds(html, pageUrl, providerContext);
     const streams: Stream[] = [];
-    let subtitles: TextTracks = [];
     const unsupported = new Set<string>();
 
     for (const embed of embeds) {
       if (/blogger\.com\/video\.g/i.test(embed.url)) {
-        try {
-          streams.push(
-            ...(await resolveBlogger(
-              embed.url,
-              pageUrl,
-              userAgent,
-              providerContext,
-              signal,
-            )),
-          );
-        } catch (error) {
-          console.log("Anikai Blogger source failed", error);
-        }
+        // Blogger is deliberately excluded: its current 720p transcodes are
+        // much slower than the dedicated 1080p H-Sub CDN above.
+        unsupported.add("slow Blogger");
       } else if (/\.(?:m3u8|mp4)(?:[?#]|$)/i.test(embed.url)) {
         streams.push({
           server: "Anikai Direct",
@@ -355,15 +216,6 @@ export async function getStream({
         }
       } else if (/megaplay\./i.test(embed.host)) {
         unsupported.add(embed.host);
-        try {
-          subtitles = await megaplaySubtitles(
-            embed.url,
-            providerContext,
-            signal,
-          );
-        } catch (error) {
-          console.log("Anikai megaplay subtitles failed", error);
-        }
       } else {
         unsupported.add(embed.host);
       }
@@ -382,9 +234,6 @@ export async function getStream({
           ? `This episode is only hosted on ${[...unsupported].join(", ")}, which this provider cannot resolve yet`
           : "No playable H-Sub streams were found",
       );
-    }
-    if (subtitles.length) {
-      for (const stream of deduped) stream.subtitles = subtitles;
     }
     return deduped;
   } catch (error) {

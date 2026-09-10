@@ -1,11 +1,7 @@
-import {
-  ProviderContext,
-  SkipInterval,
-  Stream,
-  TextTracks,
-} from "../types";
+import { ProviderContext, Stream } from "../types";
 import { throwProviderError } from "../providerErrors";
-import { getApi, parseEpisodeLink } from "./client";
+import { getAniNekoHardSubStreams } from "../extractors/anineko";
+import { AnimeTitle, getApi, parseEpisodeLink } from "./client";
 
 interface AnimeGgSource {
   url: string;
@@ -15,9 +11,7 @@ interface AnimeGgSource {
 }
 
 interface AnimeGgPlayback {
-  sub?: {
-    sources?: AnimeGgSource[];
-  } | null;
+  sub?: { sources?: AnimeGgSource[] } | null;
 }
 
 interface AnimeGgDownload {
@@ -31,25 +25,8 @@ interface AnimeGgDownloads {
   downloads?: AnimeGgDownload[];
 }
 
-interface SubtitleTrack {
-  file?: string;
-  label?: string;
-  kind?: string;
-}
-
-interface TimeRange {
-  start?: number;
-  end?: number;
-}
-
-interface SoftSubPlayback {
-  sub?: {
-    sources?: AnimeGgSource[];
-    subtitles?: SubtitleTrack[];
-    headers?: Record<string, string>;
-    intro?: TimeRange | null;
-    outro?: TimeRange | null;
-  } | null;
+interface AnimeDetails {
+  title?: AnimeTitle;
 }
 
 function qualityOf(value?: string | number): string {
@@ -60,60 +37,11 @@ function sortStreams(streams: Stream[], preferred: string): Stream[] {
   return streams.sort((left, right) => {
     const leftPreferred = left.quality === preferred ? 1 : 0;
     const rightPreferred = right.quality === preferred ? 1 : 0;
-    const leftHardSub = left.tags?.includes("H-Sub") ? 1 : 0;
-    const rightHardSub = right.tags?.includes("H-Sub") ? 1 : 0;
     return (
       rightPreferred - leftPreferred ||
-      rightHardSub - leftHardSub ||
       Number(right.quality || 0) - Number(left.quality || 0)
     );
   });
-}
-
-function languageOf(label: string): string {
-  const value = label.toLowerCase();
-  if (value.includes("english")) return "en";
-  if (value.includes("portuguese")) return "pt";
-  if (value.includes("spanish")) return "es";
-  if (value.includes("french")) return "fr";
-  if (value.includes("german")) return "de";
-  if (value.includes("italian")) return "it";
-  if (value.includes("russian")) return "ru";
-  if (value.includes("arabic")) return "ar";
-  return "und";
-}
-
-function subtitleTracks(items?: SubtitleTrack[]): TextTracks {
-  return (items || [])
-    .filter((item) => item.file && item.kind !== "thumbnails")
-    .map((item) => {
-      const title = String(item.label || "Subtitles");
-      return {
-        title,
-        language: languageOf(title),
-        type: "text/vtt" as const,
-        uri: String(item.file),
-      };
-    });
-}
-
-function skipIntervals(intro?: TimeRange | null, outro?: TimeRange | null): SkipInterval[] {
-  const ranges: SkipInterval[] = [];
-  if (Number(intro?.end) > Number(intro?.start)) {
-    ranges.push({
-      title: "Intro",
-      from: Number(intro?.start),
-      to: Number(intro?.end),
-    });
-  }
-  if (Number(outro?.end) > Number(outro?.start)) {
-    ranges.push({
-      title: "Outro",
-      from: Number(outro?.start),
-      to: Number(outro?.end),
-    });
-  }
-  return ranges;
 }
 
 async function downloadStreams(
@@ -132,7 +60,7 @@ async function downloadStreams(
     .map((item) => {
       const quality = qualityOf(item.resolution || item.quality);
       return {
-        server: `AnimeGG Download ${quality ? `${quality}p` : "MP4"}${item.filesize ? ` • ${item.filesize}` : ""}`,
+        server: `AnimeGG ${quality ? `${quality}p` : "MP4"}${item.filesize ? ` • ${item.filesize}` : ""}`,
         link: String(item.download),
         type: "mp4",
         quality: quality || undefined,
@@ -174,90 +102,21 @@ async function playbackStreams(
     });
 }
 
-async function expandHlsSource(
-  source: AnimeGgSource,
-  headers: Record<string, string>,
-  providerContext: ProviderContext,
-  signal?: AbortSignal,
-): Promise<Array<{ link: string; type: string; quality: string }>> {
-  const explicit = qualityOf(source.quality);
-  if (!source.isM3U8 && !/\.m3u8(?:[?#]|$)/i.test(source.url)) {
-    return [{ link: source.url, type: "mp4", quality: explicit }];
-  }
-  try {
-    const response = await providerContext.axios.get(source.url, {
-      signal,
-      headers,
-    });
-    const playlist = String(response.data || "");
-    const lines = playlist.split(/\r?\n/).map((line) => line.trim());
-    const variants: Array<{ link: string; type: string; quality: string }> = [];
-    for (let index = 0; index < lines.length; index += 1) {
-      if (!lines[index].includes("#EXT-X-STREAM-INF")) continue;
-      const quality = qualityOf(lines[index]);
-      for (let next = index + 1; next < lines.length; next += 1) {
-        if (!lines[next] || lines[next].startsWith("#")) continue;
-        variants.push({
-          link: new URL(lines[next], source.url).href,
-          type: "m3u8",
-          quality,
-        });
-        break;
-      }
-    }
-    if (variants.length) return variants;
-  } catch (error) {
-    console.log("Fallback HLS quality detection failed", error);
-  }
-  return [{ link: source.url, type: "m3u8", quality: explicit }];
-}
-
-async function softSubFallbackStreams(
+async function titleCandidates(
   animeId: string,
-  episode: string,
-  route: "megaplay" | "zokoanime",
-  label: string,
   providerContext: ProviderContext,
   signal?: AbortSignal,
-): Promise<Stream[]> {
-  const result = await getApi<SoftSubPlayback>(
+): Promise<string[]> {
+  const response = await getApi<{ data?: AnimeDetails } | AnimeDetails>(
     providerContext,
-    `/watch/${encodeURIComponent(animeId)}/episode/${encodeURIComponent(episode)}/${route}`,
+    `/anime/${encodeURIComponent(animeId)}`,
     signal,
   );
-  const group = result.sub;
-  if (!group) return [];
-  const tracks = subtitleTracks(group.subtitles);
-  const skip = skipIntervals(group.intro, group.outro);
-  const streams: Stream[] = [];
-  for (const source of group.sources || []) {
-    if (!source.url) continue;
-    const headers = {
-      ...providerContext.commonHeaders,
-      ...(group.headers || {}),
-      ...(source.headers || {}),
-    };
-    const variants = await expandHlsSource(
-      source,
-      headers,
-      providerContext,
-      signal,
-    );
-    for (const variant of variants) {
-      streams.push({
-        server: `${label} ${variant.quality ? `${variant.quality}p` : "Auto"} • Soft-Sub fallback`,
-        link: variant.link,
-        type: variant.type,
-        quality: variant.quality || undefined,
-        tag: "Soft-Sub fallback",
-        tags: ["Soft-Sub", "English Subtitles", "Fallback"],
-        headers,
-        subtitles: tracks,
-        skip: skip.length ? skip : undefined,
-      });
-    }
-  }
-  return streams;
+  const anime = ((response as { data?: AnimeDetails }).data ||
+    response) as AnimeDetails;
+  return [anime.title?.english, anime.title?.romaji]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
 }
 
 export async function getStream({
@@ -311,23 +170,16 @@ export async function getStream({
       }
     }
     if (!streams.length) {
-      for (const [route, label] of [
-        ["megaplay", "MegaPlay"],
-        ["zokoanime", "Zoko"],
-      ] as const) {
-        try {
-          streams = await softSubFallbackStreams(
-            animeId,
-            episode,
-            route,
-            label,
-            providerContext,
-            signal,
-          );
-          if (streams.length) break;
-        } catch (error) {
-          console.log(`${label} fallback source failed`, error);
-        }
+      try {
+        streams = await getAniNekoHardSubStreams({
+          titles: await titleCandidates(animeId, providerContext, signal),
+          episode,
+          providerContext,
+          signal,
+          isDownload,
+        });
+      } catch (error) {
+        console.log("AniNeko 1080p H-Sub fallback failed", error);
       }
     }
 
@@ -337,13 +189,13 @@ export async function getStream({
     if (!filtered.length) {
       if (primaryError) {
         throw new Error(
-          "AnimeGG had no file and the native 1080p fallbacks were unavailable",
+          "AnimeGG had no file and the 1080p Hard Sub mirror was unavailable",
         );
       }
-      throw new Error("No allowed native 1080p streams were available");
+      throw new Error("No allowed Hard Sub streams were available");
     }
     return sortStreams(filtered, preferred);
   } catch (error) {
-    throwProviderError("Anime 1080 Native", "stream", error);
+    throwProviderError("Anime H-Sub 1080", "stream", error);
   }
 }

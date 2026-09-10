@@ -2,16 +2,16 @@
   {
     "display_name": "Anikai H-Sub",
     "value": "anikaiHSub",
-    "version": "1.0.4",
+    "version": "2.0.0",
     "icon": "",
     "type": "global",
     "hasSettings": true,
     "disabled": false
   },
   {
-    "display_name": "Anime 1080 Native",
+    "display_name": "Anime H-Sub 1080",
     "value": "animepaheHSub",
-    "version": "2.0.1",
+    "version": "2.1.0",
     "icon": "",
     "type": "global",
     "hasSettings": true,

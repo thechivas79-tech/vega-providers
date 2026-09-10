@@ -55,6 +55,6 @@ export async function getEpisodes({
       description: episode.airDate || "English H-Sub",
     }));
   } catch (error) {
-    throwProviderError("Anime 1080 Native", "episodes", error);
+    throwProviderError("Anime H-Sub 1080", "episodes", error);
   }
 }

@@ -57,8 +57,8 @@ export async function getMeta({
       tags: [
         ...(anime.genres || []),
         "1080p",
-        "H-Sub when available",
-        "Soft-Sub fallback",
+        "H-Sub",
+        "English Subbed",
       ],
       cast: (anime.characters || [])
         .map((entry) => String(entry.node?.name || "").trim())
@@ -81,6 +81,6 @@ export async function getMeta({
       webUrl: `${SITE_BASE}/anime/${id}`,
     };
   } catch (error) {
-    throwProviderError("Anime 1080 Native", "metadata", error);
+    throwProviderError("Anime H-Sub 1080", "metadata", error);
   }
 }
