@@ -9,11 +9,10 @@ const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-// Cloudflare can register cf_clearance slightly after the WebView closes, and
-// Vega dismisses the dialog as soon as it thinks the check is done. Replaying
-// the request a few times with a growing pause covers that gap.
+// Replaying the request a few times with a growing pause covers the delay
+// between the interactive check finishing and Cloudflare accepting requests.
 const RETRY_DELAYS = [800, 1800, 3000];
-const CHALLENGE_ROUNDS = 2;
+const CHALLENGE_ROUNDS = 1;
 const RETRYABLE_STATUS = [403, 429, 503, 520, 521, 522, 523, 524];
 
 export interface ApiPage<T> {
@@ -74,14 +73,6 @@ export function parseAnimeLink(value: string, baseUrl: string): AnimeReference {
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function siteRoot(url: string): string {
-  try {
-    return `${new URL(url).origin}/`;
-  } catch {
-    return url;
-  }
 }
 
 export function isChallenge(data: unknown): boolean {
@@ -271,11 +262,13 @@ async function openChallenge(
   const solved: OpenWebViewResult = await providerContext.openWebView(
     challengeUrl,
     {
-      title: options.title,
+      title: `${options.title} — wait 10 seconds`,
       description: round === 0
-        ? options.description
-        : 'Tap "Verify you are human", then wait until the AnimePahe page itself appears before leaving.',
-      waitForCookie: "cf_clearance",
+        ? 'Tap "Verify you are human", wait at least 10 seconds for the requested AnimePahe page to finish loading, then tap Done.'
+        : options.description,
+      // Omitting waitForCookie is intentional. Vega otherwise closes the
+      // dialog the instant Cloudflare creates the cookie, before its redirect
+      // has loaded the API response that the provider needs.
       force: true,
       timeoutMs: 120000,
     },
@@ -364,12 +357,10 @@ export async function getWithClearance(
 
   let solvedAtLeastOnce = false;
   for (let round = 0; round < CHALLENGE_ROUNDS; round += 1) {
-    // First round: solve on the request itself, so the WebView's own rendered
-    // response can be reused. Second round: solve on the site root, which is
-    // where Cloudflare is happiest to hand out clearance.
-    const challengeUrl = round === 0
-      ? options.challengeUrl || url
-      : siteRoot(options.challengeUrl || url);
+    // Solve on the request itself so the WebView's rendered response can be
+    // used directly. Native HTTP can have a different TLS fingerprint, which
+    // makes Cloudflare reject the same cookie outside the WebView.
+    const challengeUrl = options.challengeUrl || url;
     let solved: SolvedChallenge;
     try {
       solved = await solveChallenge(

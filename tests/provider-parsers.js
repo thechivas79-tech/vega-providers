@@ -171,6 +171,7 @@ async function testAnikaiReportsEncryptedHost() {
 async function testAnimePaheOpensTargetUrl() {
   let calls = 0;
   const opened = [];
+  const openOptions = [];
   const providerContext = {
     commonHeaders: { "User-Agent": "Vega test" },
     cheerio,
@@ -182,8 +183,9 @@ async function testAnimePaheOpensTargetUrl() {
         return { data: AIRING_PAGE };
       },
     },
-    openWebView: async (url) => {
+    openWebView: async (url, options) => {
       opened.push(url);
+      openOptions.push(options);
       return {
         data: "",
         cookies: "cf_clearance=test",
@@ -202,6 +204,12 @@ async function testAnimePaheOpensTargetUrl() {
     providerContext,
   });
   assert.deepEqual(opened, ["https://animepahe.pw/api?m=airing&page=1"]);
+  assert.equal(
+    openOptions[0].waitForCookie,
+    undefined,
+    "verification must remain open until the user taps Done",
+  );
+  assert.match(openOptions[0].description, /10 seconds/);
   assert.equal(calls, 2);
   assert.equal(posts[0].title, "Test Anime");
   assert.equal(posts[0].tag, "SubsPlease • H-Sub");

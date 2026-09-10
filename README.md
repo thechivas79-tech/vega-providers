@@ -5,7 +5,7 @@ Two anime providers for Vega:
 - **Anikai H-Sub** — catalog, search, metadata, episodes, and direct Blogger MP4 streams from `anikai.tv`.
 - **AnimePahe H-Sub** — airing catalog, search, metadata, paginated episodes, and direct Kwik HLS streams. Every result is labeled `H-Sub`.
 
-AnimePahe or Kwik may show a one-time WebView security check. Complete it and return to Vega; the provider saves the resulting clearance session.
+AnimePahe or Kwik may show a WebView security check. For AnimePahe, tap **Verify you are human**, wait at least ten seconds for the requested page to finish loading, then tap **Done**. The provider saves the resulting clearance session.
 
 ## Build
 
